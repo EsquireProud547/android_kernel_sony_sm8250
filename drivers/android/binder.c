@@ -84,6 +84,10 @@
 #include "binder_trace.h"
 #include "dbitmap.h"
 
+#ifdef CONFIG_REKERNEL
+#include <../rekernel/rekernel.h>
+#endif
+
 static HLIST_HEAD(binder_deferred_list);
 static DEFINE_MUTEX(binder_deferred_lock);
 
@@ -3674,6 +3678,10 @@ static void binder_transaction(struct binder_proc *proc,
 		binder_inner_proc_unlock(proc);
 		return_error = binder_proc_transaction(t,
 				target_proc, target_thread);
+#ifdef CONFIG_REKERNEL
+		if (return_error == BR_FROZEN_REPLY)
+			rekernel_binder_reply(target_proc, proc);
+#endif
 		if (return_error) {
 			binder_inner_proc_lock(proc);
 			binder_pop_transaction_ilocked(thread, t);
@@ -3685,6 +3693,9 @@ static void binder_transaction(struct binder_proc *proc,
 		BUG_ON(t->buffer->async_transaction != 1);
 		binder_enqueue_thread_work(thread, tcomplete);
 		return_error = binder_proc_transaction(t, target_proc, NULL);
+#ifdef CONFIG_REKERNEL
+		rekernel_binder_transaction(target_proc, proc, tr, return_error);
+#endif
 		if (return_error)
 			goto err_dead_proc_or_thread;
 	}
