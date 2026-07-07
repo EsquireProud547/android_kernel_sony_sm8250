@@ -15,6 +15,8 @@
 #ifndef _LINUX_BINDER_ALLOC_H
 #define _LINUX_BINDER_ALLOC_H
 
+#define BINDERFS_MAX_NAME 255
+
 #include <linux/rbtree.h>
 #include <linux/list.h>
 #include <linux/mm.h>
