@@ -37,19 +37,25 @@ static inline bool frozen_task_group(struct task_struct *task)
 	return (jobctl_frozen(task) || cgroup_freezing(task));
 }
 
-struct binder_proc;
-
 /* Netlink server state */
 extern bool rekernel_server_ready(void);
 extern int start_rekernel_server(void);
 
-/* Binder hooks - call after binder_proc_transaction() returns */
-extern void rekernel_binder_reply(struct binder_proc *target_proc,
-				  struct binder_proc *proc);
-extern void rekernel_binder_transaction(struct binder_proc *target_proc,
-					struct binder_proc *proc,
+/*
+ * Binder hooks. Callers must pass the source/target task pointers and
+ * pids extracted from struct binder_proc; rekernel.c does not know the
+ * layout of struct binder_proc (which is private to binder.c).
+ */
+extern void rekernel_binder_reply(struct task_struct *target_tsk,
+				  pid_t target_pid,
+				  struct task_struct *proc_tsk,
+				  pid_t proc_pid);
+extern void rekernel_binder_transaction(struct task_struct *target_tsk,
+					pid_t target_pid,
+					struct task_struct *proc_tsk,
+					pid_t proc_pid,
 					struct binder_transaction_data *tr,
-					int return_error);
+					bool oneway);
 
 /* Binder alloc hook - only call if rekernel_server_ready() */
 extern void rekernel_binder_overflow(struct task_struct *proc_task);

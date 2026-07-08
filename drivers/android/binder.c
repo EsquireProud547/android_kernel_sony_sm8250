@@ -3680,7 +3680,8 @@ static void binder_transaction(struct binder_proc *proc,
 				target_proc, target_thread);
 #ifdef CONFIG_REKERNEL
 		if (return_error == BR_FROZEN_REPLY)
-			rekernel_binder_reply(target_proc, proc);
+			rekernel_binder_reply(target_proc->tsk, target_proc->pid,
+					      proc->tsk, proc->pid);
 #endif
 		if (return_error) {
 			binder_inner_proc_lock(proc);
@@ -3694,7 +3695,17 @@ static void binder_transaction(struct binder_proc *proc,
 		binder_enqueue_thread_work(thread, tcomplete);
 		return_error = binder_proc_transaction(t, target_proc, NULL);
 #ifdef CONFIG_REKERNEL
-		rekernel_binder_transaction(target_proc, proc, tr, return_error);
+		if (return_error == BR_FROZEN_REPLY) {
+			rekernel_binder_transaction(target_proc->tsk,
+						    target_proc->pid,
+						    proc->tsk, proc->pid,
+						    tr, false);
+		} else if (!return_error && target_proc->is_frozen) {
+			rekernel_binder_transaction(target_proc->tsk,
+						    target_proc->pid,
+						    proc->tsk, proc->pid,
+						    tr, true);
+		}
 #endif
 		if (return_error)
 			goto err_dead_proc_or_thread;

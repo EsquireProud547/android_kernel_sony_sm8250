@@ -6,6 +6,7 @@
 #include <linux/export.h>
 #include <linux/fs.h>
 #include <linux/list.h>
+#include "binder_alloc.h"
 #include <linux/miscdevice.h>
 #include <linux/mutex.h>
 #include <linux/refcount.h>

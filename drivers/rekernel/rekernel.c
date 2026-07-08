@@ -5,8 +5,9 @@
  * Design constraints:
  * - Never allocate Netlink skbs or create procfs nodes while holding
  *   binder spinlocks or RCU read-side locks.
- * - Binder events use proc->is_frozen (the same flag binder itself uses).
- * - Signal events use frozen_task_group() (task/cgroup freezer state).
+ * - Binder events rely on callers (binder.c) to pass task/pid info;
+ *   this file intentionally does not include struct binder_proc.
+ * - Signal events use frozen_task_group() to detect frozen state.
  * - Network monitoring is intentionally left out; enable it only after
  *   implementing the per-UID control interface librekernel expects.
  */
@@ -22,7 +23,6 @@
 #include <linux/seq_file.h>
 #include <uapi/linux/android/binder.h>
 
-#include "../android/binder_internal.h"
 #include "rekernel.h"
 
 #define NETLINK_REKERNEL_MAX		26
@@ -154,19 +154,19 @@ static int sendMessage(char *msg, uint16_t len)
 			       MSG_DONTWAIT);
 }
 
-void rekernel_binder_reply(struct binder_proc *target_proc,
-			   struct binder_proc *proc)
+void rekernel_binder_reply(struct task_struct *target_tsk,
+			   pid_t target_pid,
+			   struct task_struct *proc_tsk,
+			   pid_t proc_pid)
 {
 	char binder_kmsg[PACKET_SIZE];
 
-	if (!target_proc || !target_proc->tsk || !proc || !proc->tsk)
+	if (!target_tsk || !proc_tsk)
 		return;
-	if (target_proc->pid == proc->pid)
-		return;
-	if (!target_proc->is_frozen)
+	if (target_pid == proc_pid)
 		return;
 	/* Match upstream Re:Kernel filter for reply events */
-	if (task_uid(target_proc->tsk).val > MAX_SYSTEM_UID)
+	if (task_uid(target_tsk).val > MAX_SYSTEM_UID)
 		return;
 
 	if (start_rekernel_server())
@@ -174,40 +174,27 @@ void rekernel_binder_reply(struct binder_proc *target_proc,
 
 	snprintf(binder_kmsg, sizeof(binder_kmsg),
 		 "type=Binder,bindertype=reply,oneway=0,from_pid=%d,from=%d,target_pid=%d,target=%d;",
-		 proc->pid, task_uid(proc->tsk).val,
-		 target_proc->pid, task_uid(target_proc->tsk).val);
+		 proc_pid, task_uid(proc_tsk).val,
+		 target_pid, task_uid(target_tsk).val);
 
 	sendMessage(binder_kmsg, strlen(binder_kmsg));
 }
 
-void rekernel_binder_transaction(struct binder_proc *target_proc,
-				 struct binder_proc *proc,
+void rekernel_binder_transaction(struct task_struct *target_tsk,
+				 pid_t target_pid,
+				 struct task_struct *proc_tsk,
+				 pid_t proc_pid,
 				 struct binder_transaction_data *tr,
-				 int return_error)
+				 bool oneway)
 {
 	char binder_kmsg[PACKET_SIZE];
-	bool oneway = tr->flags & TF_ONE_WAY;
 
-	if (!target_proc || !target_proc->tsk || !proc || !proc->tsk)
+	if (!target_tsk || !proc_tsk)
 		return;
-	if (target_proc->pid == proc->pid)
+	if (target_pid == proc_pid)
 		return;
-	if (task_uid(target_proc->tsk).val <= MIN_USERAPP_UID)
+	if (task_uid(target_tsk).val <= MIN_USERAPP_UID)
 		return;
-
-	/*
-	 * Sync transactions are rejected with BR_FROZEN_REPLY when target
-	 * is frozen. Async transactions are queued; report them if target
-	 * is still marked frozen. The is_frozen re-check for async may race
-	 * with unfreeze, but a stale notification is harmless.
-	 */
-	if (!oneway) {
-		if (return_error != BR_FROZEN_REPLY)
-			return;
-	} else {
-		if (!target_proc->is_frozen)
-			return;
-	}
 
 	if (start_rekernel_server())
 		return;
@@ -241,14 +228,14 @@ void rekernel_binder_transaction(struct binder_proc *target_proc,
 
 		snprintf(binder_kmsg, sizeof(binder_kmsg),
 			 "type=Binder,bindertype=transaction,oneway=1,from_pid=%d,from=%d,target_pid=%d,target=%d,rpc_name=%s,code=%d;",
-			 proc->pid, task_uid(proc->tsk).val,
-			 target_proc->pid, task_uid(target_proc->tsk).val,
+			 proc_pid, task_uid(proc_tsk).val,
+			 target_pid, task_uid(target_tsk).val,
 			 buf, tr->code);
 	} else {
 		snprintf(binder_kmsg, sizeof(binder_kmsg),
 			 "type=Binder,bindertype=transaction,oneway=0,from_pid=%d,from=%d,target_pid=%d,target=%d;",
-			 proc->pid, task_uid(proc->tsk).val,
-			 target_proc->pid, task_uid(target_proc->tsk).val);
+			 proc_pid, task_uid(proc_tsk).val,
+			 target_pid, task_uid(target_tsk).val);
 	}
 
 	sendMessage(binder_kmsg, strlen(binder_kmsg));
