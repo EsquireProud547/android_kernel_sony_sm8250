@@ -221,6 +221,9 @@ void rekernel_binder_reply(struct task_struct *target_tsk,
 	/* Match upstream Re:Kernel filter for reply events */
 	if (task_uid(target_tsk).val > MAX_SYSTEM_UID)
 		return;
+	/* Defensive: only report when the destination is actually frozen */
+	if (!rekernel_is_frozen(target_tsk))
+		return;
 
 	if (start_rekernel_server())
 		return;
@@ -248,6 +251,9 @@ void rekernel_binder_transaction(struct task_struct *target_tsk,
 	if (target_pid == proc_pid)
 		return;
 	if (task_uid(target_tsk).val <= MIN_USERAPP_UID)
+		return;
+	/* Defensive: only report when the destination is actually frozen */
+	if (!rekernel_is_frozen(target_tsk))
 		return;
 
 	if (start_rekernel_server())

@@ -3658,6 +3658,10 @@ static void binder_transaction(struct binder_proc *proc,
 		target_proc->outstanding_txns++;
 		binder_inner_proc_unlock(target_proc);
 
+#ifdef CONFIG_REKERNEL
+		rekernel_binder_reply(target_proc->tsk, target_proc->pid,
+				      proc->tsk, proc->pid);
+#endif
 		wake_up_interruptible_sync(&target_thread->wait);
 		binder_restore_priority(current, in_reply_to->saved_priority);
 		binder_free_transaction(in_reply_to);
@@ -3679,9 +3683,10 @@ static void binder_transaction(struct binder_proc *proc,
 		return_error = binder_proc_transaction(t,
 				target_proc, target_thread);
 #ifdef CONFIG_REKERNEL
-		if (return_error == BR_FROZEN_REPLY)
-			rekernel_binder_reply(target_proc->tsk, target_proc->pid,
-					      proc->tsk, proc->pid);
+		rekernel_binder_transaction(target_proc->tsk,
+					    target_proc->pid,
+					    proc->tsk, proc->pid,
+					    tr, false);
 #endif
 		if (return_error) {
 			binder_inner_proc_lock(proc);
@@ -3695,17 +3700,10 @@ static void binder_transaction(struct binder_proc *proc,
 		binder_enqueue_thread_work(thread, tcomplete);
 		return_error = binder_proc_transaction(t, target_proc, NULL);
 #ifdef CONFIG_REKERNEL
-		if (return_error == BR_FROZEN_REPLY) {
-			rekernel_binder_transaction(target_proc->tsk,
-						    target_proc->pid,
-						    proc->tsk, proc->pid,
-						    tr, false);
-		} else if (!return_error && target_proc->is_frozen) {
-			rekernel_binder_transaction(target_proc->tsk,
-						    target_proc->pid,
-						    proc->tsk, proc->pid,
-						    tr, true);
-		}
+		rekernel_binder_transaction(target_proc->tsk,
+					    target_proc->pid,
+					    proc->tsk, proc->pid,
+					    tr, true);
 #endif
 		if (return_error)
 			goto err_dead_proc_or_thread;
