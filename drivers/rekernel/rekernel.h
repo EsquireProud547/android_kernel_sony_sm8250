@@ -27,14 +27,20 @@ enum binder_subtype {
 	OVERFLOW
 };
 
-static inline bool jobctl_frozen(struct task_struct *task)
+/*
+ * Re:Kernel freeze predicate. Mirrors line_is_frozen() from the upstream
+ * LKM as closely as possible for 4.19 kernels:
+ *  - cgroup v2 freezer state
+ *  - jobctl / cgroup freeze transition
+ *  - group_leader actually frozen or about to freeze
+ */
+static inline bool rekernel_is_frozen(struct task_struct *task)
 {
-	return ((task->jobctl & JOBCTL_TRAP_FREEZE) != 0);
-}
-
-static inline bool frozen_task_group(struct task_struct *task)
-{
-	return (jobctl_frozen(task) || cgroup_freezing(task));
+	if (cgroup_task_frozen(task) || cgroup_task_freeze(task))
+		return true;
+	if (!task->group_leader)
+		return true;
+	return frozen(task->group_leader) || freezing(task->group_leader);
 }
 
 /* Netlink server state */

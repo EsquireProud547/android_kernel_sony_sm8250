@@ -7,7 +7,7 @@
  *   binder spinlocks or RCU read-side locks.
  * - Binder events rely on callers (binder.c) to pass task/pid info;
  *   this file intentionally does not include struct binder_proc.
- * - Signal events use frozen_task_group() to detect frozen state.
+ * - Signal events use rekernel_is_frozen() to detect frozen state.
  * - Network monitoring is intentionally left out; enable it only after
  *   implementing the per-UID control interface librekernel expects.
  */
@@ -173,9 +173,10 @@ void rekernel_binder_reply(struct task_struct *target_tsk,
 		return;
 
 	snprintf(binder_kmsg, sizeof(binder_kmsg),
-		 "type=Binder,bindertype=reply,oneway=0,from_pid=%d,from=%d,target_pid=%d,target=%d;",
+		 "type=Binder,bindertype=reply,oneway=0,from_pid=%d,from=%d,target_pid=%d,target=%d,rpc_name=%s,code=%d;",
 		 proc_pid, task_uid(proc_tsk).val,
-		 target_pid, task_uid(target_tsk).val);
+		 target_pid, task_uid(target_tsk).val,
+		 "SYNC_BINDER_REPLY", -1);
 
 	sendMessage(binder_kmsg, strlen(binder_kmsg));
 }
@@ -233,9 +234,10 @@ void rekernel_binder_transaction(struct task_struct *target_tsk,
 			 buf, tr->code);
 	} else {
 		snprintf(binder_kmsg, sizeof(binder_kmsg),
-			 "type=Binder,bindertype=transaction,oneway=0,from_pid=%d,from=%d,target_pid=%d,target=%d;",
+			 "type=Binder,bindertype=transaction,oneway=0,from_pid=%d,from=%d,target_pid=%d,target=%d,rpc_name=%s,code=%d;",
 			 proc_pid, task_uid(proc_tsk).val,
-			 target_pid, task_uid(target_tsk).val);
+			 target_pid, task_uid(target_tsk).val,
+			 "SYNC_BINDER", -1);
 	}
 
 	sendMessage(binder_kmsg, strlen(binder_kmsg));
@@ -249,9 +251,10 @@ void rekernel_binder_overflow(struct task_struct *proc_task)
 		return;
 
 	snprintf(binder_kmsg, sizeof(binder_kmsg),
-		 "type=Binder,bindertype=free_buffer_full,oneway=1,from_pid=%d,from=%d,target_pid=%d,target=%d;",
+		 "type=Binder,bindertype=free_buffer_full,oneway=1,from_pid=%d,from=%d,target_pid=%d,target=%d,rpc_name=%s,code=%d;",
 		 current->pid, task_uid(current).val,
-		 proc_task->pid, task_uid(proc_task).val);
+		 proc_task->pid, task_uid(proc_task).val,
+		 "FREE_BUFFER_FULL", -1);
 
 	sendMessage(binder_kmsg, strlen(binder_kmsg));
 }
@@ -267,7 +270,7 @@ void rekernel_signal(int sig, struct task_struct *killer,
 	if (start_rekernel_server())
 		return;
 
-	if (!frozen_task_group(dst))
+	if (!rekernel_is_frozen(dst))
 		return;
 
 	if (task_uid(killer).val == task_uid(dst).val)

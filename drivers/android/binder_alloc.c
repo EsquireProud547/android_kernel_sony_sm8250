@@ -451,7 +451,7 @@ static struct binder_buffer *binder_alloc_new_buf_locked(
 		rcu_read_unlock();
 
 		if (proc_task) {
-			if (frozen_task_group(proc_task)
+			if (rekernel_is_frozen(proc_task)
 			    && rekernel_server_ready())
 				rekernel_binder_overflow(proc_task);
 			put_task_struct(proc_task);
