@@ -441,7 +441,7 @@ static struct binder_buffer *binder_alloc_new_buf_locked(
 #ifdef CONFIG_REKERNEL
 	if (is_async
 	    && (alloc->free_async_space < 3 * (size + sizeof(struct binder_buffer))
-	    || alloc->free_async_space < (1 << 17))) {
+	    || alloc->free_async_space < WARN_AHEAD_SPACE)) {
 		struct task_struct *proc_task;
 
 		rcu_read_lock();

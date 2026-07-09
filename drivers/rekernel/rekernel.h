@@ -14,6 +14,7 @@
 #define MAX_SYSTEM_UID			2000
 #define INTERFACETOKEN_BUFF_SIZE	140
 #define PARCEL_OFFSET			16
+#define WARN_AHEAD_SPACE		(1 << 17)
 
 enum report_type {
 	BINDER,

@@ -13,6 +13,7 @@
  */
 
 #include <linux/init.h>
+#include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/mutex.h>
@@ -36,7 +37,8 @@ static int netlink_unit = NETLINK_REKERNEL_MIN;
 static DEFINE_MUTEX(rekernel_init_mutex);
 
 #ifdef CONFIG_PROC_FS
-static struct proc_dir_entry *rekernel_dir, *rekernel_unit_entry;
+static struct proc_dir_entry *rekernel_dir, *rekernel_unit_entry,
+	*rekernel_version_entry;
 
 static int rekernel_unit_show(struct seq_file *m, void *v)
 {
@@ -49,9 +51,27 @@ static int rekernel_unit_open(struct inode *inode, struct file *file)
 	return single_open(file, rekernel_unit_show, NULL);
 }
 
+static int rekernel_version_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%s\n", REKERNEL_VERSION);
+	return 0;
+}
+
+static int rekernel_version_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rekernel_version_show, NULL);
+}
+
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0))
 static const struct proc_ops rekernel_unit_fops = {
 	.proc_open	= rekernel_unit_open,
+	.proc_read	= seq_read,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= single_release,
+};
+
+static const struct proc_ops rekernel_version_fops = {
+	.proc_open	= rekernel_version_open,
 	.proc_read	= seq_read,
 	.proc_lseek	= seq_lseek,
 	.proc_release	= single_release,
@@ -63,12 +83,39 @@ static const struct file_operations rekernel_unit_fops = {
 	.llseek		= seq_lseek,
 	.release	= single_release,
 };
+
+static const struct file_operations rekernel_version_fops = {
+	.open		= rekernel_version_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
 #endif
 #endif /* CONFIG_PROC_FS */
 
 static void netlink_rcv_msg(struct sk_buff *skbuffer)
 {
-	/* librekernel does not send commands on legacy socket */
+	struct nlmsghdr *nlhdr;
+	char *umsg;
+
+	if (skbuffer->len < nlmsg_total_size(0))
+		return;
+
+	nlhdr = nlmsg_hdr(skbuffer);
+	umsg = nlmsg_data(nlhdr);
+	if (!umsg)
+		return;
+
+	if (!memcmp(umsg, "#proc_remove", min_t(size_t, 12, nlmsg_len(nlhdr)))) {
+#ifdef CONFIG_PROC_FS
+		if (rekernel_dir) {
+			proc_remove(rekernel_dir);
+			rekernel_dir = NULL;
+			rekernel_unit_entry = NULL;
+			rekernel_version_entry = NULL;
+		}
+#endif
+	}
 }
 
 static struct netlink_kernel_cfg rekernel_cfg = {
@@ -123,6 +170,12 @@ int start_rekernel_server(void)
 		if (!rekernel_unit_entry)
 			pr_err("Re:Kernel: failed to create /proc/rekernel/%s\n",
 			       buff);
+
+		rekernel_version_entry = proc_create("version", 0444,
+						     rekernel_dir,
+						     &rekernel_version_fops);
+		if (!rekernel_version_entry)
+			pr_err("Re:Kernel: failed to create /proc/rekernel/version\n");
 	}
 #endif
 
@@ -252,8 +305,8 @@ void rekernel_binder_overflow(struct task_struct *proc_task)
 
 	snprintf(binder_kmsg, sizeof(binder_kmsg),
 		 "type=Binder,bindertype=free_buffer_full,oneway=1,from_pid=%d,from=%d,target_pid=%d,target=%d,rpc_name=%s,code=%d;",
-		 current->pid, task_uid(current).val,
-		 proc_task->pid, task_uid(proc_task).val,
+		 task_tgid_nr(current), task_uid(current).val,
+		 task_tgid_nr(proc_task), task_uid(proc_task).val,
 		 "FREE_BUFFER_FULL", -1);
 
 	sendMessage(binder_kmsg, strlen(binder_kmsg));
