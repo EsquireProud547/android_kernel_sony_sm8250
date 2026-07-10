@@ -3,16 +3,12 @@ config REKERNEL
 	default n
 	help
 	  Enable Re:Kernel event reporting for tombstone apps using
-	  librekernel. The implementation registers the Generic Netlink
-	  family "rekernel" (matching the upstream LKM) and falls back to
-	  the legacy raw-Netlink protocol if genl registration fails.
+	  librekernel. This source-integrated implementation registers the
+	  Generic Netlink family "rekernel" matching the upstream LKM and
+	  emits Binder, Signal and (optionally) Network events for frozen
+	  processes.
 
-	  Events include Binder transactions/replies, async-buffer overflow,
-	  and fatal signals delivered to frozen processes. Network monitoring
-	  is available separately via CONFIG_REKERNEL_NETWORK but requires
-	  the per-UID control interface to be useful.
-
-	  This is intended for non-GKI/QGKI kernels <= 5.4 where the LKM
+	  This is intended for non-GKI/QGKI kernels where the upstream LKM
 	  vendor-hook path is not available.
 
 config REKERNEL_NETWORK
@@ -21,6 +17,7 @@ config REKERNEL_NETWORK
 	depends on NETFILTER
 	default n
 	help
-	  Enable inbound network monitoring. Note: this implementation does
-	  not provide the per-UID addMonitorNet/delMonitorNet control
-	  interface used by librekernel; it is kept disabled by default.
+	  Enable inbound network monitoring. Userspace can register UIDs to
+	  monitor via the ADD_MONITOR_NET Generic Netlink command and tear
+	  down a process' sockets via KILL_NET. This mirrors the upstream LKM
+	  netfilter implementation.

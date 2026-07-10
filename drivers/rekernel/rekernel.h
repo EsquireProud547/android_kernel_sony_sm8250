@@ -9,31 +9,21 @@
 #include <linux/cgroup.h>
 #include <linux/freezer.h>
 
+/*
+ * Re:Kernel version. Keep in sync with upstream LKM REKERNEL_MAJOR_VERSION.
+ */
 #define REKERNEL_VERSION		"10.0"
-#define MIN_USERAPP_UID			10000
-#define MAX_SYSTEM_UID			2000
-#define INTERFACETOKEN_BUFF_SIZE	140
-#define PARCEL_OFFSET			16
-#define WARN_AHEAD_SPACE		(1 << 17)
 
-enum report_type {
-	BINDER,
-	SIGNAL,
-	NETWORK
-};
-
-enum binder_subtype {
-	REPLY,
-	TRANSACTION,
-	OVERFLOW
-};
+#define MIN_USERAPP_UID			(10000)
+#define MAX_SYSTEM_UID			(2000)
+#define SYSTEM_APP_UID			(1000)
+#define INTERFACETOKEN_BUFF_SIZE	(140)
+#define PARCEL_OFFSET			(16)
+#define RESERVE_ORDER			(17)
+#define WARN_AHEAD_SPACE		(1 << RESERVE_ORDER)
 
 /*
- * Re:Kernel freeze predicate. Mirrors line_is_frozen() from the upstream
- * LKM as closely as possible for 4.19 kernels:
- *  - cgroup v2 freezer state
- *  - jobctl / cgroup freeze transition
- *  - group_leader actually frozen or about to freeze
+ * Freeze predicate matching upstream LKM line_is_frozen() for 4.19.
  */
 static inline bool rekernel_is_frozen(struct task_struct *task)
 {
@@ -44,14 +34,23 @@ static inline bool rekernel_is_frozen(struct task_struct *task)
 	return frozen(task->group_leader) || freezing(task->group_leader);
 }
 
-/* Netlink server state */
-extern bool rekernel_server_ready(void);
-extern int start_rekernel_server(void);
+/* Transport state */
+extern bool rekernel_netlink_ready(void);
+extern int rekernel_netlink_start(void);
+extern void rekernel_netlink_stop(void);
 
 /*
- * Binder hooks. Callers must pass the source/target task pointers and
- * pids extracted from struct binder_proc; rekernel.c does not know the
- * layout of struct binder_proc (which is private to binder.c).
+ * Network monitoring control. Defined unconditionally so callers can compile;
+ * implementations are no-ops when CONFIG_REKERNEL_NETWORK is disabled.
+ */
+extern void net_uid_add(uid_t uid);
+extern void net_uid_del(uid_t uid);
+extern int rekernel_kill_net_connections(pid_t pid);
+
+/*
+ * Binder hooks. Callers must pass the source/target task pointers and pids
+ * extracted from struct binder_proc; rekernel.c does not know the layout of
+ * struct binder_proc (private to binder.c).
  */
 extern void rekernel_binder_reply(struct task_struct *target_tsk,
 				  pid_t target_pid,
@@ -64,7 +63,7 @@ extern void rekernel_binder_transaction(struct task_struct *target_tsk,
 					struct binder_transaction_data *tr,
 					bool oneway);
 
-/* Binder alloc hook - only call if rekernel_server_ready() */
+/* Binder alloc hook - caller must ensure server is ready */
 extern void rekernel_binder_overflow(struct task_struct *proc_task);
 
 /* Signal hook */
