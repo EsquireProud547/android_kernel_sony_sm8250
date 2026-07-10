@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Re:Kernel legacy Netlink implementation for non-GKI/QGKI kernels.
+ * Re:Kernel Netlink implementation for non-GKI/QGKI kernels.
+ *
+ * Supports both Generic Netlink (preferred, matches upstream LKM) and
+ * legacy raw netlink (fallback). librekernel tries genl first and falls
+ * back to legacy automatically.
  *
  * Design constraints:
  * - Never allocate Netlink skbs or create procfs nodes while holding
@@ -20,6 +24,7 @@
 #include <linux/cred.h>
 #include <net/sock.h>
 #include <linux/netlink.h>
+#include <net/genetlink.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <uapi/linux/android/binder.h>
@@ -31,10 +36,38 @@
 #define USER_PORT			100
 #define PACKET_SIZE			256
 
-static struct sock *rekernel_netlink;
-extern struct net init_net;
+/* Generic Netlink definitions matching upstream LKM */
+#define REKERNEL_GENL_FAMILY_NAME	"rekernel"
+#define REKERNEL_GENL_MCGRP_NAME	"events"
+
+enum {
+	REKERNEL_C_UNSPEC,
+	REKERNEL_C_EVENT,
+	REKERNEL_C_ADD_MONITOR_NET,
+	REKERNEL_C_DEL_MONITOR_NET,
+	REKERNEL_C_KILL_NET,
+	REKERNEL_C_GET_VERSION,
+	__REKERNEL_C_MAX,
+};
+#define REKERNEL_C_MAX			(__REKERNEL_C_MAX - 1)
+
+enum {
+	REKERNEL_A_UNSPEC,
+	REKERNEL_A_MSG,
+	REKERNEL_A_UID,
+	REKERNEL_A_PID,
+	__REKERNEL_A_MAX,
+};
+#define REKERNEL_A_MAX			(__REKERNEL_A_MAX - 1)
+
 static int netlink_unit = NETLINK_REKERNEL_MIN;
 static DEFINE_MUTEX(rekernel_init_mutex);
+
+/* transport state */
+static struct genl_family rekernel_genl_family;
+static bool rekernel_genl_registered;
+static struct sock *rekernel_netlink;
+extern struct net init_net;
 
 #ifdef CONFIG_PROC_FS
 static struct proc_dir_entry *rekernel_dir, *rekernel_unit_entry,
@@ -93,6 +126,68 @@ static const struct file_operations rekernel_version_fops = {
 #endif
 #endif /* CONFIG_PROC_FS */
 
+/* ---- Generic Netlink command handlers ---- */
+
+static int rekernel_genl_get_version(struct sk_buff *skb,
+				     struct genl_info *info)
+{
+	struct sk_buff *reply;
+	void *hdr;
+	int ret;
+
+	reply = genlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	if (!reply)
+		return -ENOMEM;
+
+	hdr = genlmsg_put(reply, info->snd_portid, info->snd_seq,
+			  &rekernel_genl_family, 0,
+			  REKERNEL_C_GET_VERSION);
+	if (!hdr) {
+		nlmsg_free(reply);
+		return -EMSGSIZE;
+	}
+
+	if (nla_put_string(reply, REKERNEL_A_MSG, REKERNEL_VERSION)) {
+		nlmsg_free(reply);
+		return -EMSGSIZE;
+	}
+
+	ret = genlmsg_unicast(genl_info_net(info), reply, info->snd_portid);
+	return ret;
+}
+
+static const struct nla_policy rekernel_genl_policy[REKERNEL_A_MAX + 1] = {
+	[REKERNEL_A_MSG] = { .type = NLA_NUL_STRING,
+			     .len = PACKET_SIZE - 1 },
+	[REKERNEL_A_UID] = { .type = NLA_U32 },
+	[REKERNEL_A_PID] = { .type = NLA_U32 },
+};
+
+static const struct genl_ops rekernel_genl_ops[] = {
+	{
+		.cmd	= REKERNEL_C_GET_VERSION,
+		.doit	= rekernel_genl_get_version,
+		.policy = rekernel_genl_policy,
+	},
+};
+
+static struct genl_multicast_group rekernel_genl_mcgrps[] = {
+	{ .name = REKERNEL_GENL_MCGRP_NAME, },
+};
+
+static struct genl_family rekernel_genl_family = {
+	.name		= REKERNEL_GENL_FAMILY_NAME,
+	.version	= 1,
+	.maxattr	= REKERNEL_A_MAX,
+	.netnsok	= true,
+	.ops		= rekernel_genl_ops,
+	.n_ops		= ARRAY_SIZE(rekernel_genl_ops),
+	.mcgrps		= rekernel_genl_mcgrps,
+	.n_mcgrps	= ARRAY_SIZE(rekernel_genl_mcgrps),
+};
+
+/* ---- Legacy raw netlink receive ---- */
+
 static void netlink_rcv_msg(struct sk_buff *skbuffer)
 {
 	struct nlmsghdr *nlhdr;
@@ -124,13 +219,45 @@ static struct netlink_kernel_cfg rekernel_cfg = {
 
 bool rekernel_server_ready(void)
 {
-	return rekernel_netlink != NULL;
+	return rekernel_genl_registered || rekernel_netlink != NULL;
 }
+
+/* ---- procfs helpers ---- */
+
+#ifdef CONFIG_PROC_FS
+static void rekernel_create_procfs(void)
+{
+	char buff[32];
+
+	rekernel_dir = proc_mkdir("rekernel", NULL);
+	if (!rekernel_dir) {
+		pr_err("Re:Kernel: failed to create /proc/rekernel\n");
+		return;
+	}
+
+	rekernel_version_entry = proc_create("version", 0444, rekernel_dir,
+					     &rekernel_version_fops);
+	if (!rekernel_version_entry)
+		pr_err("Re:Kernel: failed to create /proc/rekernel/version\n");
+
+	/* legacy unit file only needed when raw netlink is active */
+	if (rekernel_netlink) {
+		snprintf(buff, sizeof(buff), "%d", netlink_unit);
+		rekernel_unit_entry = proc_create(buff, 0644, rekernel_dir,
+						  &rekernel_unit_fops);
+		if (!rekernel_unit_entry)
+			pr_err("Re:Kernel: failed to create /proc/rekernel/%s\n",
+			       buff);
+	}
+}
+#endif
+
+/* ---- init ---- */
 
 /*
  * Start the Netlink server during late init so that userspace can connect
  * immediately after boot, regardless of when the first frozen-target binder
- * event occurs. If this fails the hook path below still retries lazily.
+ * event occurs.
  */
 static int __init rekernel_late_init(void)
 {
@@ -143,82 +270,110 @@ late_initcall(rekernel_late_init);
 
 int start_rekernel_server(void)
 {
-	char buff[32];
-
-	if (rekernel_netlink)
+	if (rekernel_server_ready())
 		return 0;
 
 	mutex_lock(&rekernel_init_mutex);
 
 	/* Double-check after acquiring mutex */
-	if (rekernel_netlink)
+	if (rekernel_server_ready())
 		goto unlock;
 
 	pr_info("Re:Kernel v%s starting...\n", REKERNEL_VERSION);
 
-	for (netlink_unit = NETLINK_REKERNEL_MIN;
-	     netlink_unit < NETLINK_REKERNEL_MAX; netlink_unit++) {
-		rekernel_netlink = netlink_kernel_create(&init_net, netlink_unit,
-							 &rekernel_cfg);
-		if (rekernel_netlink)
-			break;
-	}
+	/* 1) try Generic Netlink first (matches upstream LKM) */
+	if (genl_register_family(&rekernel_genl_family) == 0) {
+		rekernel_genl_registered = true;
+		pr_info("Re:Kernel: Generic Netlink family registered\n");
+	} else {
+		pr_warn("Re:Kernel: failed to register genl family, falling back to legacy\n");
 
-	if (!rekernel_netlink) {
-		pr_err("Re:Kernel: failed to create Netlink server!\n");
-		netlink_unit = 0;
-		goto unlock;
-	}
+		/* 2) fall back to legacy raw netlink */
+		for (netlink_unit = NETLINK_REKERNEL_MIN;
+		     netlink_unit < NETLINK_REKERNEL_MAX; netlink_unit++) {
+			rekernel_netlink = netlink_kernel_create(&init_net,
+								netlink_unit,
+								&rekernel_cfg);
+			if (rekernel_netlink)
+				break;
+		}
 
-	pr_info("Re:Kernel: Netlink server on unit %d, port %d\n",
-		netlink_unit, USER_PORT);
+		if (!rekernel_netlink) {
+			pr_err("Re:Kernel: failed to create legacy Netlink server!\n");
+			netlink_unit = 0;
+			goto unlock;
+		}
+		pr_info("Re:Kernel: legacy Netlink server on unit %d, port %d\n",
+			netlink_unit, USER_PORT);
+	}
 
 #ifdef CONFIG_PROC_FS
-	rekernel_dir = proc_mkdir("rekernel", NULL);
-	if (!rekernel_dir) {
-		pr_err("Re:Kernel: failed to create /proc/rekernel\n");
-	} else {
-		snprintf(buff, sizeof(buff), "%d", netlink_unit);
-		rekernel_unit_entry = proc_create(buff, 0644, rekernel_dir,
-						  &rekernel_unit_fops);
-		if (!rekernel_unit_entry)
-			pr_err("Re:Kernel: failed to create /proc/rekernel/%s\n",
-			       buff);
-
-		rekernel_version_entry = proc_create("version", 0444,
-						     rekernel_dir,
-						     &rekernel_version_fops);
-		if (!rekernel_version_entry)
-			pr_err("Re:Kernel: failed to create /proc/rekernel/version\n");
-	}
+	rekernel_create_procfs();
 #endif
 
 unlock:
 	mutex_unlock(&rekernel_init_mutex);
-	return rekernel_netlink ? 0 : -1;
+	return rekernel_server_ready() ? 0 : -1;
 }
+
+/* ---- message sending ---- */
 
 static int sendMessage(char *msg, uint16_t len)
 {
 	struct sk_buff *skbuffer;
-	struct nlmsghdr *nlhdr;
+	void *hdr;
+	int ret;
 
-	skbuffer = nlmsg_new(len, GFP_ATOMIC);
-	if (!skbuffer) {
-		pr_err_ratelimited("Re:Kernel: netlink alloc failure\n");
-		return -1;
+	if (rekernel_genl_registered) {
+		skbuffer = genlmsg_new(NLMSG_ALIGN(len + NLMSG_HDRLEN),
+				       GFP_ATOMIC);
+		if (!skbuffer) {
+			pr_err_ratelimited("Re:Kernel: genlmsg alloc failure\n");
+			return -1;
+		}
+
+		hdr = genlmsg_put(skbuffer, 0, 0, &rekernel_genl_family,
+				  0, REKERNEL_C_EVENT);
+		if (!hdr) {
+			pr_err_ratelimited("Re:Kernel: genlmsg_put failure\n");
+			nlmsg_free(skbuffer);
+			return -1;
+		}
+
+		if (nla_put(skbuffer, REKERNEL_A_MSG, len, msg)) {
+			pr_err_ratelimited("Re:Kernel: nla_put failure\n");
+			nlmsg_free(skbuffer);
+			return -1;
+		}
+
+		ret = genlmsg_multicast(&rekernel_genl_family, skbuffer, 0, 0,
+					GFP_ATOMIC);
+		/* -ESRCH means no listeners, not a real error */
+		return (ret == -ESRCH) ? 0 : ret;
 	}
 
-	nlhdr = nlmsg_put(skbuffer, 0, 0, netlink_unit, len, 0);
-	if (!nlhdr) {
-		pr_err_ratelimited("Re:Kernel: nlmsg_put failure\n");
-		nlmsg_free(skbuffer);
-		return -1;
+	if (rekernel_netlink) {
+		struct nlmsghdr *nlhdr;
+
+		skbuffer = nlmsg_new(len, GFP_ATOMIC);
+		if (!skbuffer) {
+			pr_err_ratelimited("Re:Kernel: netlink alloc failure\n");
+			return -1;
+		}
+
+		nlhdr = nlmsg_put(skbuffer, 0, 0, netlink_unit, len, 0);
+		if (!nlhdr) {
+			pr_err_ratelimited("Re:Kernel: nlmsg_put failure\n");
+			nlmsg_free(skbuffer);
+			return -1;
+		}
+
+		memcpy(nlmsg_data(nlhdr), msg, len);
+		return netlink_unicast(rekernel_netlink, skbuffer, USER_PORT,
+				       MSG_DONTWAIT);
 	}
 
-	memcpy(nlmsg_data(nlhdr), msg, len);
-	return netlink_unicast(rekernel_netlink, skbuffer, USER_PORT,
-			       MSG_DONTWAIT);
+	return -1;
 }
 
 void rekernel_binder_reply(struct task_struct *target_tsk,
