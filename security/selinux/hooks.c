@@ -1190,15 +1190,6 @@ static inline u16 socket_type_to_security_class(int family, int type, int protoc
 		case NETLINK_CRYPTO:
 			return SECCLASS_NETLINK_CRYPTO_SOCKET;
 		default:
-			/*
-			 * Re:Kernel legacy range (22-26) is a userspace protocol.
-			 * Map it to the generic netlink socket class so that
-			 * domains allowed to use NETLINK_GENERIC (e.g. apps under
-			 * KernelSU) can connect to the Re:Kernel server without
-			 * requiring a custom raw-netlink policy.
-			 */
-			if (protocol >= 22 && protocol <= 26)
-				return SECCLASS_NETLINK_GENERIC_SOCKET;
 			return SECCLASS_NETLINK_SOCKET;
 		}
 	case PF_PACKET:
