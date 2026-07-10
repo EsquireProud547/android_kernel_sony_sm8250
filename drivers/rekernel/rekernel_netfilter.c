@@ -31,15 +31,11 @@
 #include <net/rtnetlink.h>
 
 #include "rekernel.h"
+#include "rekernel_internal.h"
 
 #define PACKET_SIZE			256
 #define REKERNEL_NET_UID_HASH_BITS	6
 
-/* from rekernel.c */
-extern int sendMessage(char *packet_buffer, uint16_t len);
-extern bool rekernel_netlink_ready(void);
-
-static void rekernel_netfilter_stop(void);
 static DEFINE_HASHTABLE(rekernel_net_uid_map, REKERNEL_NET_UID_HASH_BITS);
 
 struct uid_info {
@@ -142,7 +138,8 @@ static int rekernel_collect_socket(const void *p, struct file *file,
 		if (sk->sk_protocol == IPPROTO_TCP) {
 			if (rekernel_sk_is_loopback(sk))
 				return 0;
-			if (sk->sk_uid.val == SYSTEM_APP_UID)
+			/* AID_SHELL = 2000 */
+			if (sk->sk_uid.val == 2000)
 				return 0;
 		}
 		sock_hold(sk);
@@ -230,7 +227,7 @@ static unsigned int rekernel_pkg_ipv4_ipv6_in(void *priv,
 	if (!dev)
 		return NF_ACCEPT;
 
-	sk = skb_to_full_sk(socket_buffer);
+	sk = socket_buffer->sk;
 	if (!sk || !sk_fullsock(sk))
 		return NF_ACCEPT;
 

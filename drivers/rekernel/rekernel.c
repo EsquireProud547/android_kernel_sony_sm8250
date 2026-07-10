@@ -27,9 +27,16 @@
 #include <uapi/linux/android/binder.h>
 
 #include "rekernel.h"
+#include "rekernel_internal.h"
 
-#define USER_PORT			100
 #define PACKET_SIZE			256
+
+/* Stubs when network monitoring is disabled. */
+#ifndef CONFIG_REKERNEL_NETWORK
+void net_uid_add(uid_t uid) { }
+void net_uid_del(uid_t uid) { }
+int rekernel_kill_net_connections(pid_t pid) { return -EOPNOTSUPP; }
+#endif
 
 /* Generic Netlink definitions - must match upstream LKM ABI */
 #define REKERNEL_GENL_FAMILY_NAME	"rekernel"
@@ -58,16 +65,6 @@ enum {
 static bool rekernel_genl_registered;
 static DEFINE_MUTEX(rekernel_init_mutex);
 
-/* ---- network monitoring (optional, see rekernel_netfilter.c) ---- */
-
-#ifdef CONFIG_REKERNEL_NETWORK
-extern int rekernel_netfilter_start(void);
-extern void rekernel_netfilter_stop(void);
-#else
-static inline int rekernel_netfilter_start(void) { return 0; }
-static inline void rekernel_netfilter_stop(void) { }
-#endif
-
 /* Forward declaration - the family struct is defined below the ops. */
 static struct genl_family rekernel_genl_family;
 
@@ -82,8 +79,12 @@ static int rekernel_genl_add_monitor_net(struct sk_buff *skb,
 		return -EINVAL;
 
 	muid = (uid_t)nla_get_u32(info->attrs[REKERNEL_A_UID]);
+#ifdef CONFIG_REKERNEL_NETWORK
 	net_uid_add(muid);
 	return 0;
+#else
+	return -EOPNOTSUPP;
+#endif
 }
 
 static int rekernel_genl_del_monitor_net(struct sk_buff *skb,
@@ -95,8 +96,12 @@ static int rekernel_genl_del_monitor_net(struct sk_buff *skb,
 		return -EINVAL;
 
 	muid = (uid_t)nla_get_u32(info->attrs[REKERNEL_A_UID]);
+#ifdef CONFIG_REKERNEL_NETWORK
 	net_uid_del(muid);
 	return 0;
+#else
+	return -EOPNOTSUPP;
+#endif
 }
 
 static int rekernel_genl_kill_net(struct sk_buff *skb,
