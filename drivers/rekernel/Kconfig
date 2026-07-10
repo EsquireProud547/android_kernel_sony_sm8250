@@ -1,10 +1,16 @@
 config REKERNEL
-	bool "Re:Kernel legacy Netlink support"
+	bool "Re:Kernel event reporting support"
 	default n
 	help
-	  Enable Re:Kernel event reporting via legacy Netlink protocol.
-	  This allows tombstone apps using librekernel to receive Binder,
-	  Signal and (optionally) Network events for frozen processes.
+	  Enable Re:Kernel event reporting for tombstone apps using
+	  librekernel. The implementation registers the Generic Netlink
+	  family "rekernel" (matching the upstream LKM) and falls back to
+	  the legacy raw-Netlink protocol if genl registration fails.
+
+	  Events include Binder transactions/replies, async-buffer overflow,
+	  and fatal signals delivered to frozen processes. Network monitoring
+	  is available separately via CONFIG_REKERNEL_NETWORK but requires
+	  the per-UID control interface to be useful.
 
 	  This is intended for non-GKI/QGKI kernels <= 5.4 where the LKM
 	  vendor-hook path is not available.
