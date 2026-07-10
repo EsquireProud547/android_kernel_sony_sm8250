@@ -135,7 +135,8 @@ static int rekernel_genl_get_version(struct sk_buff *skb,
 	void *hdr;
 	int ret;
 
-	reply = genlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	reply = genlmsg_new(nla_total_size(strlen(REKERNEL_VERSION) + 1),
+			    GFP_KERNEL);
 	if (!reply)
 		return -ENOMEM;
 
@@ -144,15 +145,17 @@ static int rekernel_genl_get_version(struct sk_buff *skb,
 			  REKERNEL_C_GET_VERSION);
 	if (!hdr) {
 		nlmsg_free(reply);
-		return -EMSGSIZE;
+		return -ENOMEM;
 	}
 
 	if (nla_put_string(reply, REKERNEL_A_MSG, REKERNEL_VERSION)) {
+		genlmsg_cancel(reply, hdr);
 		nlmsg_free(reply);
 		return -EMSGSIZE;
 	}
 
-	ret = genlmsg_unicast(genl_info_net(info), reply, info->snd_portid);
+	genlmsg_end(reply, hdr);
+	ret = genlmsg_reply(reply, info);
 	return ret;
 }
 
@@ -346,6 +349,8 @@ static int sendMessage(char *msg, uint16_t len)
 			return -1;
 		}
 
+		genlmsg_end(skbuffer, hdr);
+
 		ret = genlmsg_multicast(&rekernel_genl_family, skbuffer, 0, 0,
 					GFP_ATOMIC);
 		/* -ESRCH means no listeners, not a real error */
@@ -501,9 +506,6 @@ void rekernel_signal(int sig, struct task_struct *killer,
 		return;
 
 	if (!rekernel_is_frozen(dst))
-		return;
-
-	if (task_uid(killer).val == task_uid(dst).val)
 		return;
 
 	snprintf(binder_kmsg, sizeof(binder_kmsg),

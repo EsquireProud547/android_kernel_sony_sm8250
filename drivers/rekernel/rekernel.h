@@ -9,7 +9,7 @@
 #include <linux/cgroup.h>
 #include <linux/freezer.h>
 
-#define REKERNEL_VERSION		"10.0-legacy"
+#define REKERNEL_VERSION		"10.0"
 #define MIN_USERAPP_UID			10000
 #define MAX_SYSTEM_UID			2000
 #define INTERFACETOKEN_BUFF_SIZE	140
