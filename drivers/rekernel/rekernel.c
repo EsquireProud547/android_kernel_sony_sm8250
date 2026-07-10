@@ -127,6 +127,20 @@ bool rekernel_server_ready(void)
 	return rekernel_netlink != NULL;
 }
 
+/*
+ * Start the Netlink server during late init so that userspace can connect
+ * immediately after boot, regardless of when the first frozen-target binder
+ * event occurs. If this fails the hook path below still retries lazily.
+ */
+static int __init rekernel_late_init(void)
+{
+	int rc = start_rekernel_server();
+
+	pr_info("Re:Kernel: late init %s\n", rc == 0 ? "OK" : "FAIL");
+	return 0;
+}
+late_initcall(rekernel_late_init);
+
 int start_rekernel_server(void)
 {
 	char buff[32];
@@ -221,11 +235,12 @@ void rekernel_binder_reply(struct task_struct *target_tsk,
 	/* Match upstream Re:Kernel filter for reply events */
 	if (task_uid(target_tsk).val > MAX_SYSTEM_UID)
 		return;
-	/* Defensive: only report when the destination is actually frozen */
-	if (!rekernel_is_frozen(target_tsk))
-		return;
 
 	if (start_rekernel_server())
+		return;
+
+	/* Defensive: only report when the destination is actually frozen */
+	if (!rekernel_is_frozen(target_tsk))
 		return;
 
 	snprintf(binder_kmsg, sizeof(binder_kmsg),
@@ -252,11 +267,12 @@ void rekernel_binder_transaction(struct task_struct *target_tsk,
 		return;
 	if (task_uid(target_tsk).val <= MIN_USERAPP_UID)
 		return;
-	/* Defensive: only report when the destination is actually frozen */
-	if (!rekernel_is_frozen(target_tsk))
-		return;
 
 	if (start_rekernel_server())
+		return;
+
+	/* Defensive: only report when the destination is actually frozen */
+	if (!rekernel_is_frozen(target_tsk))
 		return;
 
 	if (oneway) {
